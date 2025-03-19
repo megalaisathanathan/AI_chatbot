@@ -12,7 +12,7 @@ from botbuilder.core import (BotFrameworkAdapter,
 )
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
-
+from botbuilder.core import UserState, MemoryStorage
 from bot import MyBot
 from config import DefaultConfig
 from datetime import datetime, timezone
@@ -56,8 +56,13 @@ async def on_error(context: TurnContext, error: Exception):
 
 ADAPTER.on_turn_error = on_error
 
-# Create the Bot
-BOT = MyBot()
+MEMORY = MemoryStorage()
+
+# Create UserState using Memory Storage
+USER_STATE = UserState(MEMORY)
+
+# Pass UserState to MyBot when creating an instance
+BOT = MyBot(USER_STATE)
 
 
 # Listen for incoming requests on /api/messages
