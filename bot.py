@@ -1,29 +1,26 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
+
 from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount
-
-
-# class MyBot(ActivityHandler):
-#     # See https://aka.ms/about-bot-activity-message to learn more about the message and other activity types.
-
-#     async def on_message_activity(self, turn_context: TurnContext):
-#         await turn_context.send_activity(f"You said '{ turn_context.activity.text }'")
-
-#     async def on_members_added_activity(
-#         self,
-#         members_added: ChannelAccount,
-#         turn_context: TurnContext
-#     ):
-#         for member_added in members_added:
-#             if member_added.id != turn_context.activity.recipient.id:
-#                 await turn_context.send_activity("Hello and welcome!")
-
 from botbuilder.core import ActivityHandler, TurnContext, MemoryStorage, UserState
+import urllib.parse
+import urllib.request
+import base64
+import json
+from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, CardFactory, MemoryStorage, UserState
+from botbuilder.schema import (
+    ChannelAccount,
+    HeroCard,
+    CardAction,
+    ActivityTypes,
+    Attachment,
+    AttachmentData,
+    Activity,
+    ActionTypes,
+)
 
-
-#from promptflow import tool
 import requests
 import pandas as pd
 import logging
@@ -33,6 +30,7 @@ import requests
 import time
 import pandas as pd
 import requests
+import requests
 import math
 from word2number import w2n
 import numpy as np
@@ -40,6 +38,24 @@ import bs4
 import json
 from botbuilder.core import MessageFactory
 from botbuilder.schema import Attachment
+import json
+from botbuilder.core import MessageFactory
+from botbuilder.schema import Attachment
+import os
+import base64
+import json
+from azure.core.credentials import AzureKeyCredential
+from azure.ai.documentintelligence import DocumentIntelligenceClient
+from azure.ai.documentintelligence.models import AnalyzeResult, AnalyzeDocumentRequest
+from azure.ai.formrecognizer import DocumentAnalysisClient  # Updated class name
+import re
+import requests
+import math
+import pandas as pd
+import json
+import uuid
+import io
+
     
 
 class MyBot(ActivityHandler):
@@ -616,7 +632,14 @@ class MyBot(ActivityHandler):
         df2.loc[:, 'Quantity'] = df2['Quantity'].apply(self.convert_to_number)
         df2.loc[:, 'Amount'] = df2['Amount'].apply(self.clean_number)
         df2.loc[:, 'Unit Price'] = df2['Unit Price'].apply(self.clean_number)
+        df2.loc[:, 'Quantity'] = df2['Quantity'].apply(self.convert_to_number)
+        df2.loc[:, "Quantity"] = df2["Quantity"].astype(float)
+        df2.loc[:, 'Amount'] = df2['Amount'].apply(self.clean_number)
+        df2.loc[:, 'Unit Price'] = df2['Unit Price'].apply(self.clean_number)
 
+        print("before post_processing: ")
+        print(df2)
+        print(" ")
         # Update specific rows
         values_to_update = [
             "Total Sales (VAT Included)",
@@ -630,6 +653,7 @@ class MyBot(ActivityHandler):
             for i, value in enumerate(values_to_update[::-1]):
                 if df2.loc[last_indices[-1 - i], "Total"] != value:
                     df2.loc[last_indices[-1 - i], "Total"] = value
+
         else:
             if len(df2) >= 2:
                 second_last_index = df2.index[-2]
@@ -644,6 +668,10 @@ class MyBot(ActivityHandler):
         # VAT and Amount calculations
         try:
             df2 = df2.apply(self.correct_values_validated_val, axis=1)
+            print("after post_processing: ")
+            print(df2)
+            print(" ")
+
             rowTotalSales = df2[df2['Total'].str.contains("Total Sales", case=False, na=False)]
             rowTotalDue = df2[df2['Total'].str.contains("Total Amount Due", case=False, na=False)]
             rowTotalLess = df2[df2['Total'].str.contains("Less", case=False, na=False)]
@@ -776,4 +804,416 @@ class MyBot(ActivityHandler):
         await self.question_index_accessor.set(turn_context, question_index)
         await self.answers_accessor.set(turn_context, answers)
         await self.val_list_accessor.set(turn_context, val_list)
+
         await self.user_state.save_changes(turn_context)
+
+        await self.user_state.save_changes(turn_context)
+
+    def docu_processing(self, input_image):
+        print(input_image)
+        ai_studio_endpoint = 'https://azureaistudioh5078952159.cognitiveservices.azure.com/'
+        ai_studio_key = '9BMknek8xn6Le7c9AG3THiBj8MhbN33MtGLjSpmAs5hMWDjWbB27JQQJ99BAACYeBjFXJ3w3AAAAACOGHKb6'
+        endpoint = "https://docu-int-demo-prycegas.cognitiveservices.azure.com/"
+        key = "376e1adee6124181baf381262ec40ccc"
+        model_id = "invoice-prycegas4"
+        # Use DocumentAnalysisClient instead of DocumentIntelligenceClient
+        document_analysis_client = DocumentAnalysisClient(endpoint=endpoint, credential=AzureKeyCredential(key))
+        
+        with open(input_image, "rb") as file:
+                poller = document_analysis_client.begin_analyze_document(model_id, file)
+        
+        invoices = poller.result()
+        print("check")
+        invoice_data = []
+        for page in invoices.pages:
+            for word in page.words:
+                invoice_data.append([
+                    page.page_number, 
+                    word.content, 
+                    word.confidence
+                ])
+
+        invoice_df = pd.DataFrame(invoice_data, columns=['Page Number', 'Word Content', 'Confidence'])
+        invoice_df["Word ID"] = invoice_df.index + 1
+        field_data = []
+
+        # Iterate through the documents and fields
+        for document in invoices.documents:
+            for name, field in document.fields.items():
+                # Extract the field value, type, and confidence
+                field_value = str(field.value) if field.value else str(field.content)
+                field_data.append([
+                    name,  # Field Name
+                    field_value,  # Field Value
+                    field.value_type,  # Field Type
+                    field.confidence  # Confidence
+                ])
+        # Convert the list to a pandas DataFrame
+        table_df = pd.DataFrame(field_data, columns=['Field Name', 'Field Value', 'Field Type', 'Confidence'])
+        # Airtable Credentials
+        # Airtable configuration
+        API_KEY = "pat5OcW9QNOKiAhag.3ebe39f745213b2186de1ecd4bcaa4140b4d1df7519bafe048bb42e3ea77418e"
+        BASE_ID = "appFA2iUehCVrUSdl"
+        # Headers
+        HEADERS = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        TABLE_NAME = "Table 7"
+
+        # Airtable API URL
+        URL = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME}"
+
+        for _, row in invoice_df.iterrows():
+            # confidence_value = row['Confidence']
+            # if isinstance(confidence_value, float) and (math.isnan(confidence_value) or math.isinf(confidence_value)):
+            #     confidence_value = 0.0  # Replace NaN or Inf with a default value
+            # # print(row['Field Name'])
+            DATA = {
+                "fields": {
+                    "Page Number": str(row['Page Number']),
+                    "Word Content": str(row['Word Content']),
+                    "Confidence": str(row['Confidence']),
+                    "Word ID":str(row['Word ID'])
+                }
+            }
+            # print(json.dumps(DATA, indent=4))
+            # Send the request to Airtable
+            response = requests.post(URL, json=DATA, headers=HEADERS)
+            
+            # Check the response
+            if response.status_code in [200, 201]:
+                print(f"Record inserted successfully: {response.json()}")
+            else:
+                print(f"Error inserting record: {response.status_code}, {response.text}")
+
+        TABLE_NAME_2 = "Table 6"
+
+        # Airtable API URL
+        URL2 = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME_2}"
+
+        for _, row in table_df.iterrows():
+            confidence_value = row['Confidence']
+            if isinstance(confidence_value, float) and (math.isnan(confidence_value) or math.isinf(confidence_value)):
+                confidence_value = 0.0  # Replace NaN or Inf with a default value
+            # print(row['Field Name'])
+            DATA = {
+                "fields": {
+                    "Field Name": str(row['Field Name']),
+                    "Field Value": str(row['Field Value']),
+                    "Field Type": str(row['Field Type']),
+                    "Confidence": confidence_value  # Ensure a valid number
+                }
+            }
+            # print(json.dumps(DATA, indent=4))
+            # Send the request to Airtable
+            response2 = requests.post(URL2, json=DATA, headers=HEADERS)
+ 
+            if response2.status_code in [200, 201]:
+                print(f"Record inserted successfully: {response.json()}")
+            else:
+                print(f"Error inserting record: {response.status_code}, {response.text}")
+        return True
+
+    async def _handle_incoming_attachment(self, turn_context: TurnContext):
+        for attachment in turn_context.activity.attachments:
+            attachment_info = await self._download_attachment_and_write(attachment)
+            if "filename" in attachment_info:
+                file_path = attachment_info["local_path"]
+                # Send confirmation message
+                await turn_context.send_activity(
+                    f"Attachment **{attachment_info['filename']}** has been received and saved to **{file_path}**."
+                )
+                image = file_path
+                # Send the uploaded image back for visualization
+                reply = MessageFactory.attachment(
+                    Attachment(
+                        name=attachment_info["filename"],
+                        content_type=attachment.content_type,  # Ensure the correct content type
+                        content_url=attachment.content_url  # Display image from the URL
+                    )
+                )
+                await turn_context.send_activity(reply)
+                return image
+        return None
+
+    async def _download_attachment_and_write(self, attachment: Attachment) -> dict:
+        """
+        Retrieve the attachment via the attachment's contentUrl.
+        :param attachment:
+        :return: Dict: keys "filename", "local_path"
+        """
+        try:
+            response = urllib.request.urlopen(attachment.content_url)
+            headers = response.info()
+
+            # If user uploads JSON file, this prevents it from being written as
+            # "{"type":"Buffer","data":[123,13,10,32,32,34,108..."
+            if headers["content-type"] == "application/json":
+                data = bytes(json.load(response)["data"])
+            else:
+                data = response.read()
+
+            local_filename = os.path.join(os.getcwd(), attachment.name)
+            with open(local_filename, "wb") as out_file:
+                out_file.write(data)
+
+            return {"filename": attachment.name, "local_path": local_filename}
+        except Exception as exception:
+            print(exception)
+            return {}
+
+    async def _handle_outgoing_attachment(self, turn_context: TurnContext):
+        user_choice = turn_context.activity.text  # Get user input
+        reply = Activity(type=ActivityTypes.message)
+        attachments = []
+
+        if user_choice == "1":
+            reply.text = "This is an inline attachment."
+            attachments = [self._get_inline_attachment()]
+
+        elif user_choice == "2":
+            reply.text = "This is an internet attachment."
+            attachments = [self._get_internet_attachment()]
+
+        elif user_choice == "3":
+            reply.text = "This is an uploaded attachment."
+            uploaded_attachment = await self._get_upload_attachment(turn_context)
+            attachments = [uploaded_attachment]
+
+        else:
+            reply.text = "Your input was not recognized, please try again."
+
+        reply.attachments = attachments
+        await turn_context.send_activity(reply)
+
+        return attachments  # Return attachments list
+
+    async def _display_options(self, turn_context: TurnContext):
+        """
+        Create a HeroCard with options for the user to interact with the bot.
+        :param turn_context:
+        :return:
+        """
+
+        # Note that some channels require different values to be used in order to get buttons to display text.
+        # In this code the emulator is accounted for with the 'title' parameter, but in other channels you may
+        # need to provide a value for other parameters like 'text' or 'displayText'.
+        card = HeroCard(
+            text="You can upload an image or select one of the following choices",
+            buttons=[
+                CardAction(
+                    type=ActionTypes.im_back, title="1. Inline Attachment", value="1"
+                ),
+                CardAction(
+                    type=ActionTypes.im_back, title="2. Internet Attachment", value="2"
+                ),
+                CardAction(
+                    type=ActionTypes.im_back, title="3. Uploaded Attachment", value="3"
+                ),
+            ],
+        )
+
+        reply = MessageFactory.attachment(CardFactory.hero_card(card))
+        await turn_context.send_activity(reply)
+
+    def _get_inline_attachment(self) -> Attachment:
+        """
+        Creates an inline attachment sent from the bot to the user using a base64 string.
+        Using a base64 string to send an attachment will not work on all channels.
+        Additionally, some channels will only allow certain file types to be sent this way.
+        For example a .png file may work but a .pdf file may not on some channels.
+        Please consult the channel documentation for specifics.
+        :return: Attachment
+        """
+        file_path = os.path.join(os.getcwd(), "resources/architecture-resize.png")
+        with open(file_path, "rb") as in_file:
+            base64_image = base64.b64encode(in_file.read()).decode()
+
+        return Attachment(
+            name="architecture-resize.png",
+            content_type="image/png",
+            content_url=f"data:image/png;base64,{base64_image}",
+        )
+
+    async def _get_upload_attachment(self, turn_context: TurnContext) -> Attachment:
+        """
+        Creates an "Attachment" to be sent from the bot to the user from an uploaded file.
+        :param turn_context:
+        :return: Attachment
+        """
+        with open(
+            os.path.join(os.getcwd(), "Template24.png"), "rb"
+        ) as in_file:
+            image_data = in_file.read()
+
+        connector = await turn_context.adapter.create_connector_client(
+            turn_context.activity.service_url
+        )
+        conversation_id = turn_context.activity.conversation.id
+        response = await connector.conversations.upload_attachment(
+            conversation_id,
+            AttachmentData(
+                name="Template24.png",
+                original_base64=image_data,
+                type="image/png",
+            ),
+        )
+
+        base_uri: str = connector.config.base_url
+        attachment_uri = (
+            base_uri
+            + ("" if base_uri.endswith("/") else "/")
+            + f"v3/attachments/{response.id}/views/original"
+        )
+
+        return Attachment(
+            name="Template24.png",
+            content_type="image/png",
+            content_url=attachment_uri,
+        )
+
+    def _get_internet_attachment(self) -> Attachment:
+        """
+        Creates an Attachment to be sent from the bot to the user from a HTTP URL.
+        :return: Attachment
+        """
+        return Attachment(
+            name="Template1.png",
+            content_type="image/png",
+            content_url="https://aiautomationbot001.blob.core.windows.net/input/Template1.png",
+        )
+    
+    async def on_message_activity(self, turn_context: TurnContext):
+        try:
+            if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
+                for attachment in turn_context.activity.attachments:
+                    print(f"Attachment content URL: {attachment.content_url}")
+
+                # Capture the returned image file path from _handle_incoming_attachment
+                image = await self._handle_incoming_attachment(turn_context)
+                print(image)
+                if image:
+                    # Pass the image file path to docu_processing
+                    result = self.docu_processing(image)
+                    print(result)
+            else:
+                await self._display_options(turn_context)  # Show options
+                attachments = await self._handle_outgoing_attachment(turn_context)  # Get selected attachments
+                # Extract content URLs if attachments exist
+                if attachments:
+                    response_urls = [attachment.content_url for attachment in attachments]
+                    print(f"Selected Attachment URLs: {response_urls}")
+                    result = self.docu_processing(response_urls)
+                    print(result)  # Debug output
+                # print(f"Status Code: {response.status_code}")
+                # print(f"Headers: {response.headers}")
+                # print(f"Response Text: {response.text}")  # Log the full response body
+                # image_data = response.content  # Get the raw image bytes
+                # print("check2")
+                # Convert the image data to a PFImage
+                # pf_image = PFImage(image_data, mime_type=attachment.content_type)
+                # print("check3")
+                # print(pf_image)
+                # Pass the PFImage to the OCR function
+
+
+                # result = self.docu_processing(response)
+                # print(result)  # Debug output
+        except Exception as e:
+            print(f"An error occurred: {e}")    
+
+        
+
+        
+
+        # user_status = await self.user_data_accessor.get(turn_context, lambda: {"first_message": False})
+        # question_index = await self.question_index_accessor.get(turn_context, lambda: 0)
+        # answers = await self.answers_accessor.get(turn_context, lambda: [])
+
+        # table_df = pd.DataFrame()
+        # invoice_df = pd.DataFrame()
+        # invoice_df, table_df, debug_info = self.fetch_airtable_data()
+        # confidences_df, val_list, df2, df = self.post_processing(table_df, invoice_df)
+        
+
+        # if not user_status["first_message"]:
+        #     df2_preview = df2.to_markdown(index=False)  
+        #     await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
+
+        
+        # # Save val_list to state if it's the first interaction
+        # if not user_status["first_message"]:
+        #     await self.val_list_accessor.set(turn_context, val_list)
+        # else:
+        #     val_list = await self.val_list_accessor.get(turn_context, lambda: [])
+
+        
+        # if val_list:  # If there are validation questions
+        #     # Check if this is the first question
+        #     if "question_index" not in user_status:
+        #         user_status["question_index"] = 0  # Initialize index for tracking questions
+        #         user_status["updated_val_list"] = val_list.copy()  # Keep a copy of original values
+
+        #     question_index = user_status["question_index"]
+
+        #     # If receiving a response from user
+        #     if user_status["first_message"] and question_index > 0:
+        #         user_input = turn_context.activity.text.strip()
+                
+        #         # Process user input
+        #         if user_input.lower() != "yes":
+        #             try:
+        #                 new_value = float(user_input)  # Convert to float
+        #                 user_status["updated_val_list"][question_index - 1][2] = new_value  # Update value
+        #             except ValueError:
+        #                 await turn_context.send_activity("Invalid input. Please enter a valid number.")
+        #                 return  # Re-ask the same question
+
+        #     # Ask next question if available
+        #     if question_index < len(val_list):
+        #         row_num, col_name, cell_value = val_list[question_index]
+        #         question_text = (
+        #             f"Is the extracted value '{cell_value}' in row {row_num} and column '{col_name}' correct? "
+        #             f"Type 'yes' if correct, or type the actual number if it's wrong."
+        #         )
+        #         await turn_context.send_activity(question_text)
+                
+        #         # Move to the next question
+        #         user_status["question_index"] += 1
+        #         user_status["first_message"] = True  
+
+        #     else:
+        #         # All questions answered, update df2
+        #         await turn_context.send_activity("All questions answered. Updating values...")
+        #         print("Updated val_list:", user_status["updated_val_list"])
+
+        #         for index, col, new_value in user_status["updated_val_list"]:
+        #             print("+==============+")
+        #             print(index, " ", col, " ", new_value)
+        #             df2.at[index, col] = new_value  # Apply updates to df2
+
+        #         # Reset tracking variables
+        #         user_status["first_message"] = False
+        #         user_status.pop("question_index", None)
+        #         user_status.pop("updated_val_list", None)
+        #         print(df2)
+
+        #         # Proceed with post-processing
+        #         self.execute_post_processing_validated_val(df2, df, confidences_df)
+        #         df2_preview = df2.to_markdown(index=False)  # Convert DataFrame to Markdown format
+        #         await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
+
+        # else:  # If val_list is empty, directly proceed with post-processing
+        #     self.execute_post_processing(df2, df, confidences_df)
+        #     df2_preview = df2.to_markdown(index=False)  # Convert DataFrame to Markdown format
+        #     await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
+
+        # # Save state
+        # await self.user_data_accessor.set(turn_context, user_status)
+        # await self.question_index_accessor.set(turn_context, question_index)
+        # await self.answers_accessor.set(turn_context, answers)
+        # await self.val_list_accessor.set(turn_context, val_list)
+        # await self.user_state.save_changes(turn_context)
+

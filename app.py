@@ -7,9 +7,6 @@ from datetime import datetime, timezone
 from aiohttp import web
 from aiohttp.web import Request, Response, json_response
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-                                
-                   
- 
 from botbuilder.core.integration import aiohttp_error_middleware
 from botbuilder.schema import Activity, ActivityTypes
 from botbuilder.core import UserState, MemoryStorage
