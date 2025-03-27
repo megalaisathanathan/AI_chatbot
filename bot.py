@@ -2,13 +2,9 @@
 # Licensed under the MIT License.
 
 
-from botbuilder.core import ActivityHandler, TurnContext
-from botbuilder.schema import ChannelAccount
-from botbuilder.core import ActivityHandler, TurnContext, MemoryStorage, UserState
+
 import urllib.parse
 import urllib.request
-import base64
-import json
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, CardFactory, MemoryStorage, UserState
 from botbuilder.schema import (
     ChannelAccount,
@@ -20,27 +16,16 @@ from botbuilder.schema import (
     Activity,
     ActionTypes,
 )
-
 import requests
 import pandas as pd
 import logging
 import sys
 import re
-import requests
 import time
-import pandas as pd
-import requests
-import requests
 import math
 from word2number import w2n
 import numpy as np
 import bs4
-import json
-from botbuilder.core import MessageFactory
-from botbuilder.schema import Attachment
-import json
-from botbuilder.core import MessageFactory
-from botbuilder.schema import Attachment
 import os
 import base64
 import json
@@ -48,13 +33,9 @@ from azure.core.credentials import AzureKeyCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeResult, AnalyzeDocumentRequest
 from azure.ai.formrecognizer import DocumentAnalysisClient  # Updated class name
-import re
-import requests
-import math
-import pandas as pd
-import json
 import uuid
 import io
+from typing import List  # Add this import
 
     
 
@@ -66,6 +47,7 @@ class MyBot(ActivityHandler):
         self.question_index_accessor = self.user_state.create_property("question_index")
         self.answers_accessor = self.user_state.create_property("answers")
         self.val_list_accessor = self.user_state.create_property("val_list")
+        self.processed_messages = set()
 
         self.API_KEY = "patHbVk2KOxbMFsjf.d9d53905e9aead5ffdb50b411eaccac276bfe3b23fd83628f0660a1700911d5e"
         self.BASE_ID = "appFA2iUehCVrUSdl"
@@ -724,90 +706,7 @@ class MyBot(ActivityHandler):
         print(df)
         print(df2)
 
-    async def on_message_activity(self, turn_context: TurnContext):
-        user_status = await self.user_data_accessor.get(turn_context, lambda: {"first_message": False})
-        question_index = await self.question_index_accessor.get(turn_context, lambda: 0)
-        answers = await self.answers_accessor.get(turn_context, lambda: [])
-
-        table_df = pd.DataFrame()
-        invoice_df = pd.DataFrame()
-        invoice_df, table_df, debug_info = self.fetch_airtable_data()
-        confidences_df, val_list, df2, df = self.post_processing(table_df, invoice_df)
-        print("after post_processing: ")
-        print(df2)
-        print(" ")
-
-        if not user_status["first_message"]:
-            df2_preview = df2.to_markdown(index=False)  
-            await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
-
-        
-        # Save val_list to state if it's the first interaction
-        if not user_status["first_message"]:
-            await self.val_list_accessor.set(turn_context, val_list)
-        else:
-            val_list = await self.val_list_accessor.get(turn_context, lambda: [])
-
-        
-        if val_list:  # If there are validation questions
-            
-            # Generate questions
-            questions = [
-                f"Is the extracted value '{cell_value}' in row {row_num} and column '{col_name}' correct? "
-                f"Type 'yes' if correct, or type the actual number if it's wrong."
-                for row_num, col_name, cell_value in val_list
-            ]
-
-            # If receiving a response, store the answer and update val_list
-            if user_status["first_message"]:
-                user_input = turn_context.activity.text.strip()
-
-                if user_input.lower() != "yes":
-                    try:
-                        new_value = float(user_input)  # Convert to float
-                        val_list[question_index][2] = new_value  # Update val_list
-                    except ValueError:
-                        await turn_context.send_activity("Invalid input. Please enter a valid number.")
-                        return  # Ask the same question again
-
-                answers.append(user_input)  # Store the response
-                question_index += 1  # Move to the next question
-
-            # Ask the next question if there are more
-            if question_index < len(questions):
-                await turn_context.send_activity(questions[question_index])
-                user_status["first_message"] = True
-            else:
-                await turn_context.send_activity("All questions answered. Thank you!")
-                print("Updated val_list:", val_list)
-                user_status["first_message"] = False
-                question_index = 0
-                answers = []
-
-                # Update df2 with new values
-                for index, col, new_value in val_list:
-                    df2.at[index, col] = new_value
-
-                # Proceed with post-processing
-                self.execute_post_processing_validated_val(df2, df, confidences_df)
-                df2_preview = df2.to_markdown(index=False)  # Convert DataFrame to Markdown format
-                await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
-
-
-        else:  # If val_list is empty, directly proceed with post-processing
-            self.execute_post_processing(df2, df, confidences_df)
-            df2_preview = df2.to_markdown(index=False)  # Convert DataFrame to Markdown format
-            await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
-
-        # Save state
-        await self.user_data_accessor.set(turn_context, user_status)
-        await self.question_index_accessor.set(turn_context, question_index)
-        await self.answers_accessor.set(turn_context, answers)
-        await self.val_list_accessor.set(turn_context, val_list)
-
-        await self.user_state.save_changes(turn_context)
-
-        await self.user_state.save_changes(turn_context)
+    
 
     def docu_processing(self, input_image):
         print(input_image)
@@ -914,7 +813,251 @@ class MyBot(ActivityHandler):
                 print(f"Record inserted successfully: {response.json()}")
             else:
                 print(f"Error inserting record: {response.status_code}, {response.text}")
-        return True
+        return table_df, invoice_df
+
+    def ocr_post_processing(self, df, data):
+        row_index = 0
+        for index, row in df.iterrows():
+            if row['Field Name'] == 'invoiceTbl':
+                row_index = index
+        data_string = df.iloc[row_index, 1]
+        split_data = data_string.split("value={")
+        salesTurn=False
+        # List to hold the rows of the table
+        table_data = []
+        # Display the results
+        for index, match in enumerate(split_data):
+            # print(f"Part {index}:\n{match}\n")
+            if index > 1:
+            # match = "'quantity': DocumentField(value_type=string, value='1', content=1, bounding_regions=[BoundingRegion(page_number=1, polygon=[Point(x=702.0, y=1286.0), Point(x=744.0, y=1287.0), Point(x=743.0, y=1370.0), Point(x=701.0, y=1369.0)])], spans=[DocumentSpan(offset=327, length=1)], confidence=None), 'unitPrice': DocumentField(value_type=string, value='11.72', content=11.72, bounding_regions=[BoundingRegion(page_number=1, polygon=[Point(x=2086.0, y=1256.0), Point(x=2298.0, y=1261.0), Point(x=2296.0, y=1367.0), Point(x=2084.0, y=1362.0)])], spans=[DocumentSpan(offset=329, length=5)], confidence=None), 'amount': DocumentField(value_type=string, value='1672', content=1672, bounding_regions=[BoundingRegion(page_number=1, polygon=[Point(x=2469.0, y=1263.0), Point(x=2711.0, y=1262.0), Point(x=2711.0, y=1370.0), Point(x=2469.0, y=1371.0)])], spans=[DocumentSpan(offset=335, length=4)], confidence=None)}, content=None, bounding_regions=[], spans=[], confidence=None), DocumentField(value_type=dictionary,"
+                quantity = self.extract_field('quantity', match)
+                description = self.extract_field('description', match)
+                unit_price = self.extract_field('unitPrice', match)
+                amount = self.extract_field('amount', match)
+                total = self.extract_field('total', match)
+                table_data.append([total, quantity, description, unit_price, amount])
+
+        columns = ['Total','Quantity', 'Description', 'Unit Price', 'Amount']
+        df2 = pd.DataFrame(table_data, columns=columns)
+
+        try:
+            # Search for the row containing "LESS:" in 'Total' column
+            rowTotalSalesLess = df2[df2['Total'].str.contains("LESS", case=False, na=False) &
+                                    df2['Total'].str.contains("Total Sales", case=False, na=False)]
+
+            if not rowTotalSalesLess.empty:
+                # Index of the row that contains "LESS:"
+                idx = rowTotalSalesLess.index[0]
+
+                # Split the 'Total' column into two parts
+                total_sales_text = "Total Sales (VAT Inclusive)"
+                less_vat_text = "LESS: VAT"
+
+                # Extract the amounts: assuming Amount has two numbers separated by space
+                amount_values = df2.at[idx, 'Amount']
+                if isinstance(amount_values, str):
+                    amounts = [float(x) for x in amount_values.split()]
+                    print(amounts)
+                else:
+                    raise ValueError("Amount field format is invalid for splitting.")
+
+                if len(amounts) >= 2:
+                    # Insert a new row for "LESS: VAT" after the current row
+                    df2.loc[idx, 'Total'] = total_sales_text  # Modify the existing row
+                    df2.loc[idx, 'Amount'] = amounts[0]
+
+                    # Ensure consistent dtypes when adding the new row
+                    new_row = pd.DataFrame([{
+                        'Total': less_vat_text,
+                        'Quantity': float('nan'),  # Explicitly set as NaN for float dtype
+                        'Description': None,       # String dtype
+                        'Unit Price': float('nan'),
+                        'Amount': amounts[1]
+                    }])
+                    print(new_row)
+                    df2 = pd.concat([df2.iloc[:idx + 1], new_row, df2.iloc[idx + 1:]]).reset_index(drop=True)
+                    print(df2)
+                else:
+                    raise ValueError("Amount column does not have enough numbers to split.")
+        except Exception as e:
+            # Handle any exceptions
+            print(f"An error occurred: {e}")
+
+        try:
+            # Search for the row containing "TOTAL AMOUNT DUE" in 'Total' column
+            rowTotalAmountDue = df2[df2['Total'].str.contains("TOTAL AMOUNT DUE", case=False, na=False) &
+            df2['Total'].str.contains("ZERO Rated Sales", case=False, na=False)]
+
+            zero_rated_sales_text = "ZERO Rated Sales"
+            total_amount_due_text = "TOTAL AMOUNT DUE"
+            if not rowTotalAmountDue.empty:
+                # Index of the row containing "TOTAL AMOUNT DUE"
+                idx = rowTotalAmountDue.index[0]
+
+                # Extract amounts: Assuming multiple numbers are present in 'Amount' column
+                amount_values = df2.at[idx, 'Amount']
+                if isinstance(amount_values, str):
+                    amounts = [float(x) for x in amount_values.split()]
+                    print(f"Extracted amounts: {amounts}")
+                else:
+                    raise ValueError("Amount field format is invalid for splitting.")
+
+                # Check if at least two amounts exist
+                if len(amounts) >= 2:
+                    print("chechk2")
+                    # Modify the existing row to represent "ZERO Rated Sales"
+                    df2.loc[idx, 'Total'] = zero_rated_sales_text
+                    df2.loc[idx, 'Amount'] = amounts[0]
+
+                    # Prepare a new row for "TOTAL AMOUNT DUE"
+                    new_row = pd.DataFrame([{
+                        'Total': total_amount_due_text,
+                        'Quantity': float('nan'),
+                        'Description': None,
+                        'Unit Price': float('nan'),
+                        'Amount': amounts[1]
+                    }])
+                    # Insert the new row after the current row
+                    df2 = pd.concat([df2.iloc[:idx + 1], new_row, df2.iloc[idx + 1:]]).reset_index(drop=True)
+                    print("Row split successfully:")
+                    print(df2)
+                elif len(amounts) < 2:
+                    print("check1")
+                    df2.loc[idx, 'Total'] = total_amount_due_text
+                    df2.loc[idx, 'Amount'] = amounts[0]
+                    new_row = pd.DataFrame([{
+                            'Total': total_amount_due_text,
+                            'Quantity': float('nan'),
+                            'Description': None,
+                            'Unit Price': float('nan'),
+                            'Amount': None
+                        }])
+                else:
+                    raise ValueError("Amount column does not have enough numbers to split.")
+        except Exception as e:
+            # Handle any exceptions
+            print(f"An error occurred: {e}")
+
+        # Drop rows where `Unit Price` and `Amount` have no digits at all
+        df2.dropna(how="all", inplace=True)
+
+        df2 = df2[df2["Unit Price"].apply(self.has_digits) | df2["Amount"].apply(self.has_digits)]
+        confidences_df = self.checkConfidentialThreshold(data, df2)
+        
+        df2.loc[:, 'Quantity'] = df2['Quantity'].apply(self.convert_to_number)
+        df2.loc[:, 'Amount'] = df2['Amount'].apply(self.clean_number)
+        df2.loc[:, 'Unit Price'] = df2['Unit Price'].apply(self.clean_number)
+        values_to_update = [
+            "Total Sales (VAT Included)",
+            "LESS: 12% VAT",
+            "Net of VAT/Total",
+            "Total Amount Due"
+        ]
+
+        # Ensure df2 has at least 4 rows
+        if len(df2) >= 4:
+            # Find the indices of the last 4 rows dynamically
+            last_indices = df2.index[-4:].tolist()
+
+            # Update only the rows that need changes
+            for i, value in enumerate(values_to_update[::-1]):  # Reverse the list to match order
+                if df2.loc[last_indices[-1 - i], "Total"] != value:
+                    df2.loc[last_indices[-1 - i], "Total"] = value
+        else:
+            if len(df2) >= 2:
+                second_last_index = df2.index[-2]
+                last_index = df2.index[-1]
+
+                # Insert two new rows
+                df2.loc[second_last_index + 0.5] = None
+                df2.loc[second_last_index + 1.5] = None
+
+                # Re-sort the index to maintain order
+                df2 = df2.sort_index().reset_index(drop=True)
+
+                # Debugging output
+                print("Added two new rows. Updated DataFrame:\n", df2)
+
+            # print("Not enough rows in the DataFrame to update the last four rows.")
+
+        if len(df2) >= 4:
+            # Find the indices of the last 4 rows dynamically
+            last_indices = df2.index[-4:].tolist()
+
+            # Update only the rows that need changes
+            for i, value in enumerate(values_to_update[::-1]):  # Reverse the list to match order
+                if df2.loc[last_indices[-1 - i], "Total"] != value:
+                    df2.loc[last_indices[-1 - i], "Total"] = value
+
+        flags = []
+        totalSales = None
+        try:
+            rowTotalSales = df2[df2['Total'].str.contains("Total Sales", case=False, na=False)]
+            print("check1")
+            rowTotalDue = df2[df2['Total'].str.contains("Total Amount Due", case=False, na=False)]
+            # print("check2")
+            rowTotalLess = df2[df2['Total'].str.contains("Less", case=False, na=False)]
+            # print("check3")
+            rowTotalNetOf = df2[df2['Total'].str.contains("Net of", case=False, na=False)]
+            confidences_df.apply(self.calculate_adjusted_values, axis=1, args=(confidences_df, df2))
+            valid_rows = df2[pd.isna(df2['Total']) &
+                            df2['Quantity'].notna() &
+                            df2['Unit Price'].notna() &
+                            df2['Amount'].notna()]
+
+            # Convert values to numeric
+            valid_rows['Quantity'] = pd.to_numeric(valid_rows['Quantity'], errors='coerce')
+            valid_rows['Unit Price'] = pd.to_numeric(valid_rows['Unit Price'], errors='coerce')
+            valid_rows['Amount'] = pd.to_numeric(valid_rows['Amount'], errors='coerce')
+
+            # Ensure all values in each row are numeric
+            valid_rows = valid_rows.dropna(subset=['Quantity', 'Unit Price', 'Amount'])
+
+            # Sum the amounts
+            total_amount = valid_rows['Amount'].sum()
+            print("Total calculated from valid rows:", total_amount)
+
+            # Update the row containing "Total Sales"
+            if not rowTotalSales.empty:
+                print("chck 3")
+                df2.loc[rowTotalSales.index[0], 'Amount'] = total_amount
+                df2.loc[rowTotalDue.index[0], 'Amount'] = total_amount
+                print("chck 2")
+                print(f"Updated Total Sales row with total amount: {total_amount}")
+                # df2.loc[rowTotalDue.index[0], 'Amount'] = total_amount
+                VatPercentage = 0.892856862745098
+                NetOfVat = float(total_amount) * VatPercentage
+                VAT = float(total_amount) - NetOfVat
+                print("chck 4")
+                if not rowTotalLess.empty:
+                    df2.loc[rowTotalLess.index[0], 'Amount'] = round(VAT, 2)
+                else:
+                    print("Error: rowTotalLess is empty, cannot update VAT.")
+
+                if not rowTotalNetOf.empty:
+                    df2.loc[rowTotalNetOf.index[0], 'Amount'] = round(NetOfVat, 2)
+                else:
+                    print("Error: rowTotalNetOf is empty, cannot update NetOfVat.")
+
+            else:
+                raise ValueError("Row containing 'total sales' not found.")
+            print(f"Total Sales: {totalSales}")
+        except Exception as e:
+            # Handle any exceptions
+            print(f"An error occurred: {e}")
+        df2.loc[:, "Quantity"] = df2["Quantity"].astype(float)
+        df2.loc[:, "Unit Price"] = df2["Unit Price"].astype(float)
+        df2.loc[:, "Amount"] = pd.to_numeric(df2["Amount"], errors='coerce')  # Convert to float, invalid entries as NaN
+        # Apply corrections to each row
+        df2 = df2.apply(self.correct_values, axis=1)
+        # Apply the function to clean the invoiceID row
+        df = df.apply(self.clean_invoice_id, axis=1)
+
+        # Apply the function to the DataFrame
+        df = self.findAndUpdateAddress(df)
+        # Apply the function to the DataFrame
+        df = df.apply(self.processInvoiceType, axis=1)
+        return df, df2
 
     async def _handle_incoming_attachment(self, turn_context: TurnContext):
         for attachment in turn_context.activity.attachments:
@@ -1084,10 +1227,26 @@ class MyBot(ActivityHandler):
             content_type="image/png",
             content_url="https://aiautomationbot001.blob.core.windows.net/input/Template1.png",
         )
+
+    async def on_members_added_activity(self, members_added: List[ChannelAccount], turn_context: TurnContext):
+        for member in members_added:
+            if member.id != turn_context.activity.recipient.id:
+                await turn_context.send_activity("Hello! Please upload your invoice(s) here.")
     
+
     async def on_message_activity(self, turn_context: TurnContext):
         try:
+            # Prevent the bot from processing its own messages
+            if turn_context.activity.from_property.id == turn_context.activity.recipient.id:
+                return  # Ignore bot's own messages
+            
+            if turn_context.activity.id in self.processed_messages:
+                return  # Ignore duplicate messages
+            self.processed_messages.add(turn_context.activity.id)
+            
             if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
+                await turn_context.send_activity("Invoice received! Processing your data...")
+                
                 for attachment in turn_context.activity.attachments:
                     print(f"Attachment content URL: {attachment.content_url}")
 
@@ -1096,33 +1255,87 @@ class MyBot(ActivityHandler):
                 print(image)
                 if image:
                     # Pass the image file path to docu_processing
-                    result = self.docu_processing(image)
-                    print(result)
-            else:
-                await self._display_options(turn_context)  # Show options
-                attachments = await self._handle_outgoing_attachment(turn_context)  # Get selected attachments
-                # Extract content URLs if attachments exist
-                if attachments:
-                    response_urls = [attachment.content_url for attachment in attachments]
-                    print(f"Selected Attachment URLs: {response_urls}")
-                    result = self.docu_processing(response_urls)
-                    print(result)  # Debug output
-                # print(f"Status Code: {response.status_code}")
-                # print(f"Headers: {response.headers}")
-                # print(f"Response Text: {response.text}")  # Log the full response body
-                # image_data = response.content  # Get the raw image bytes
-                # print("check2")
-                # Convert the image data to a PFImage
-                # pf_image = PFImage(image_data, mime_type=attachment.content_type)
-                # print("check3")
-                # print(pf_image)
-                # Pass the PFImage to the OCR function
+                    table_df, invoice_df = self.docu_processing(image)
+                    df, df2 = self.ocr_post_processing(table_df, invoice_df)
+                    df_text = df.to_markdown() if not df.empty else "No data found in df."
+                    df2_text = df2.to_markdown() if not df2.empty else "No data found in df2."
 
+                    # Send results back to the user
+                    await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{df_text}\n```")
+                    await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{df2_text}\n```")
+   
 
-                # result = self.docu_processing(response)
-                # print(result)  # Debug output
+                # # invoice_df, table_df, debug_info = self.fetch_airtable_data()
+                # df, df2 = self.ocr_post_processing(table_df, invoice_df)
+
+                # # Convert DataFrames to text
+                # df_text = df.to_markdown() if not df.empty else "No data found in df."
+                # df2_text = df2.to_markdown() if not df2.empty else "No data found in df2."
+
+                # # Send results back to the user
+                # await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{df_text}\n```")
+                # await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{df2_text}\n```")
+
         except Exception as e:
             print(f"An error occurred: {e}")    
+            await turn_context.send_activity("An error occurred while processing the invoice.")
+
+    
+    # async def on_message_activity(self, turn_context: TurnContext):
+    #     try:
+    #         if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
+    #             await turn_context.send_activity("Invoice received! Processing your data...")
+    #             for attachment in turn_context.activity.attachments:
+    #                 print(f"Attachment content URL: {attachment.content_url}")
+
+    #             # Capture the returned image file path from _handle_incoming_attachment
+    #             image = await self._handle_incoming_attachment(turn_context)
+    #             print(image)
+    #             if image:
+    #                 # Pass the image file path to docu_processing
+    #                 result = self.docu_processing(image)
+    #                 print(result)
+
+    #             table_df = pd.DataFrame()
+    #             invoice_df = pd.DataFrame()
+    #             invoice_df, table_df, debug_info = self.fetch_airtable_data()
+    #             df, df2 = self.ocr_post_processing(table_df, invoice_df)
+
+    #             # Convert DataFrames to text
+    #             df_text = df.to_markdown() if not df.empty else "No data found in df."
+    #             df2_text = df2.to_markdown() if not df2.empty else "No data found in df2."
+
+    #             # Send results back to the user
+    #             await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{df_text}\n```")
+    #             await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{df2_text}\n```")
+
+    #             '''actual code end here'''
+            # else:
+            #     await self._display_options(turn_context)  # Show options
+            #     attachments = await self._handle_outgoing_attachment(turn_context)  # Get selected attachments
+            #     # Extract content URLs if attachments exist
+            #     if attachments:
+            #         response_urls = [attachment.content_url for attachment in attachments]
+            #         print(f"Selected Attachment URLs: {response_urls}")
+            #         result = self.docu_processing(response_urls)
+            #         print(result)  # Debug output
+            #     # print(f"Status Code: {response.status_code}")
+            #     # print(f"Headers: {response.headers}")
+            #     # print(f"Response Text: {response.text}")  # Log the full response body
+            #     # image_data = response.content  # Get the raw image bytes
+            #     # print("check2")
+            #     # Convert the image data to a PFImage
+            #     # pf_image = PFImage(image_data, mime_type=attachment.content_type)
+            #     # print("check3")
+            #     # print(pf_image)
+            #     # Pass the PFImage to the OCR function
+
+
+            #     # result = self.docu_processing(response)
+            #     # print(result)  # Debug output
+        except Exception as e:
+            print(f"An error occurred: {e}")    
+            await turn_context.send_activity("An error occurred while processing the invoice.")
 
         
 
