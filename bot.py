@@ -1,8 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-
-
 import urllib.parse
 import urllib.request
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, CardFactory, MemoryStorage, UserState
@@ -37,8 +35,7 @@ import uuid
 import io
 from typing import List  # Add this import
 
-    
-
+  
 class MyBot(ActivityHandler):
     def __init__(self, user_state: UserState):
         super().__init__()
