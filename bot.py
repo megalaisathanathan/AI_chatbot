@@ -34,9 +34,14 @@ from azure.ai.formrecognizer import DocumentAnalysisClient  # Updated class name
 import uuid
 import io
 from typing import List  # Add this import
+<<<<<<< HEAD
 from config import DefaultConfig
 import asyncio
 
+=======
+
+  
+>>>>>>> 74e2499f5c82421e1bb5ddb5e618c4a704c6457a
 class MyBot(ActivityHandler):
     def __init__(self, user_state: UserState):
         super().__init__()
