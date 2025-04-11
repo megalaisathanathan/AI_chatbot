@@ -18,7 +18,7 @@ from config import DefaultConfig
 CONFIG = DefaultConfig()
 
 # Define your verification token for WhatsApp webhook validation
-VERIFY_TOKEN = "8wb62gNUKNssAWigp5xRtbJhnmXZCqJnEUUEkuREdzDRvW55YuGUJQQJ99BCAC3pKaRAArohAAABAZBSk2cZ.F6PtzrIRxz9rvtufR0Y4MoQloM2fub1DNmbWyWj8H2R8pR4jjupeJQQJ99BCAC3pKaRAArohAAABAZBSYsNi"  # Replace with your secure token
+#VERIFY_TOKEN = "8wb62gNUKNssAWigp5xRtbJhnmXZCqJnEUUEkuREdzDRvW55YuGUJQQJ99BCAC3pKaRAArohAAABAZBSk2cZ.F6PtzrIRxz9rvtufR0Y4MoQloM2fub1DNmbWyWj8H2R8pR4jjupeJQQJ99BCAC3pKaRAArohAAABAZBSYsNi"  # Replace with your secure token
 
 # Create adapter.
                                                                          
@@ -69,24 +69,7 @@ BOT = MyBot(USER_STATE)
 
 # Main handler for both GET and POST requests on /api/messages
 async def messages(req: Request) -> Response:
-    # WhatsApp webhook verification (GET request)
-    if req.method == "GET":
-        mode = req.query.get("hub.mode")
-        token = req.query.get("hub.verify_token")
-        challenge = req.query.get("hub.challenge")
-        
-        if mode and token:
-            if mode == "subscribe" and token == VERIFY_TOKEN:
-                # Valid verification request: return the challenge token.
-                return Response(text=challenge, status=200)
-            else:
-                # Token mismatch or invalid mode.
-                return Response(status=403)
-        else:
-            # Missing required query parameters.
-            return Response(status=400)
-    
-    # Message handling for POST requests (bot logic)
+# Only handle POST requests
     if req.method == "POST":
         if "application/json" in req.headers.get("Content-Type", ""):
             body = await req.json()
@@ -95,23 +78,22 @@ async def messages(req: Request) -> Response:
 
         activity = Activity().deserialize(body)
         auth_header = req.headers.get("Authorization", "")
-                                                                        
-                               
 
         response = await ADAPTER.process_activity(activity, auth_header, BOT.on_turn)
         if response:
             return json_response(data=response.body, status=response.status)
         return Response(status=201)
 
+    return Response(status=405)  # Method Not Allowed for anything other than POST
+
 # Initialize the aiohttp application and add routes for GET and POST
 def init_func(argv):
     APP = web.Application(middlewares=[aiohttp_error_middleware])
-    APP.router.add_get("/api/messages", messages)
+    #APP.router.add_get("/api/messages", messages)
     APP.router.add_post("/api/messages", messages)
     return APP
 
-                                                              
-                                               
+                                          
 
 if __name__ == "__main__":
     APP = init_func(None)

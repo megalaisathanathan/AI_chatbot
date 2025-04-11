@@ -1,8 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-
-
 import urllib.parse
 import urllib.request
 from botbuilder.core import ActivityHandler, MessageFactory, TurnContext, CardFactory, MemoryStorage, UserState
@@ -36,8 +34,8 @@ from azure.ai.formrecognizer import DocumentAnalysisClient  # Updated class name
 import uuid
 import io
 from typing import List  # Add this import
-
-    
+from config import DefaultConfig
+import asyncio
 
 class MyBot(ActivityHandler):
     def __init__(self, user_state: UserState):
@@ -105,10 +103,10 @@ class MyBot(ActivityHandler):
             delete_url = f"{url}/{record_id}"
             response = requests.delete(delete_url, headers=headers)
 
-    def write_to_airtable(self, df):
-        """
-        Writes 'confidences_df' to 'Table 4'.
-        """
+    """def write_to_airtable(self, df):
+        
+        #Writes 'confidences_df' to 'Table 4'.
+        
         try:
             TABLE_NAME_READ_3 = "Table 5"
             url = f"https://api.airtable.com/v0/{BASE_ID}/{TABLE_NAME_READ_3}"
@@ -137,7 +135,7 @@ class MyBot(ActivityHandler):
                     print(f"Error inserting records: {response.text}")
 
         except Exception as e:
-            print(f"Exception occurred while writing to Table 4: {e}")
+            print(f"Exception occurred while writing to Table 4: {e}")"""
 
     def check_thresholds(self, confidences_df, df2):
         # Initialize validation list to store positions of low confidence values
@@ -1057,29 +1055,32 @@ class MyBot(ActivityHandler):
         df = self.findAndUpdateAddress(df)
         # Apply the function to the DataFrame
         df = df.apply(self.processInvoiceType, axis=1)
-        return df, df2
+        return df, df2  
 
     async def _handle_incoming_attachment(self, turn_context: TurnContext):
-        for attachment in turn_context.activity.attachments:
-            attachment_info = await self._download_attachment_and_write(attachment)
-            if "filename" in attachment_info:
-                file_path = attachment_info["local_path"]
-                # Send confirmation message
-                await turn_context.send_activity(
-                    f"Attachment **{attachment_info['filename']}** has been received and saved to **{file_path}**."
-                )
-                image = file_path
-                # Send the uploaded image back for visualization
-                reply = MessageFactory.attachment(
-                    Attachment(
-                        name=attachment_info["filename"],
-                        content_type=attachment.content_type,  # Ensure the correct content type
-                        content_url=attachment.content_url  # Display image from the URL
-                    )
-                )
-                await turn_context.send_activity(reply)
-                return image
-        return None
+    
+     for attachment in turn_context.activity.attachments:
+         # Extract details
+        name = attachment.name or "unnamed_file"
+        content_type = attachment.content_type
+        content_url = attachment.content_url
+
+        # Log or respond with metadata
+        await turn_context.send_activity(
+            f"Received attachment:\n"
+            f"**File Name**: {name}\n"
+            f"**Type**: {content_type}\n"
+            f"**URL**: {content_url}"
+        )
+        # Download and save
+        attachment_info = await self._download_attachment_and_write(attachment)
+        if "filename" in attachment_info:
+            file_path = attachment_info["local_path"]
+            await turn_context.send_activity(
+                f"File saved as: `{attachment_info['filename']}`"
+            )
+            return file_path
+     return None
 
     async def _download_attachment_and_write(self, attachment: Attachment) -> dict:
         """
@@ -1087,24 +1088,30 @@ class MyBot(ActivityHandler):
         :param attachment:
         :return: Dict: keys "filename", "local_path"
         """
+        # Application configuration
+        CONFIG = DefaultConfig()
         try:
-            response = urllib.request.urlopen(attachment.content_url)
-            headers = response.info()
+            #headers = {"Authorization": "Bearer " + os.getenv("APP_PASSWORD", "")}            
+            headers = {"Authorization": "Bearer " + CONFIG.APP_PASSWORD}
+            request = urllib.request.Request(attachment.content_url, headers=headers)
+            response = urllib.request.urlopen(request)
 
-            # If user uploads JSON file, this prevents it from being written as
-            # "{"type":"Buffer","data":[123,13,10,32,32,34,108..."
-            if headers["content-type"] == "application/json":
-                data = bytes(json.load(response)["data"])
-            else:
-                data = response.read()
+            content_disposition = response.headers.get("Content-Disposition")
+            filename = attachment.name or "downloaded_file"
+            if content_disposition:
+                parts = content_disposition.split("filename=")
+                if len(parts) > 1:
+                    filename = parts[1].strip("\"'")
 
-            local_filename = os.path.join(os.getcwd(), attachment.name)
-            with open(local_filename, "wb") as out_file:
+            # Read the binary content
+            data = response.read()
+            local_path = os.path.join(os.getcwd(), filename)
+            with open(local_path, "wb") as out_file:
                 out_file.write(data)
 
-            return {"filename": attachment.name, "local_path": local_filename}
+            return {"filename": filename, "local_path": local_path}
         except Exception as exception:
-            print(exception)
+            print(f"Download error: {exception}")
             return {}
 
     async def _handle_outgoing_attachment(self, turn_context: TurnContext):
@@ -1231,202 +1238,60 @@ class MyBot(ActivityHandler):
     async def on_members_added_activity(self, members_added: List[ChannelAccount], turn_context: TurnContext):
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
-                await turn_context.send_activity("Hello! Please upload your invoice(s) here.")
-    
-
+                await turn_context.send_activity("Hello! Please upload your invoice(s) here in jpg format.")    
+       
     async def on_message_activity(self, turn_context: TurnContext):
         try:
-            # Prevent the bot from processing its own messages
+            # Ignore bot's own messages
             if turn_context.activity.from_property.id == turn_context.activity.recipient.id:
-                return  # Ignore bot's own messages
-            
+                return
+
+            # Avoid reprocessing same message
             if turn_context.activity.id in self.processed_messages:
-                return  # Ignore duplicate messages
+                return
+
             self.processed_messages.add(turn_context.activity.id)
-            
+
+            user_text = turn_context.activity.text.strip().lower() if turn_context.activity.text else ""
+
+            # Welcome message for first contact
+            if user_text in ["hi", "hello", "/start"]:
+                await turn_context.send_activity("Hello! Please upload your invoice(s) here in the chatbot.")
+                return
+
+            image = None
+
+            #Unified Attachment Handling (works for all channels including Telegram)																		
             if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
-                await turn_context.send_activity("Invoice received! Processing your data...")
-                
-                for attachment in turn_context.activity.attachments:
-                    print(f"Attachment content URL: {attachment.content_url}")
-
-                # Capture the returned image file path from _handle_incoming_attachment
+                await turn_context.send_activity("Invoice received! Processing your attachment...")
                 image = await self._handle_incoming_attachment(turn_context)
-                print(image)
-                if image:
-                    # Pass the image file path to docu_processing
-                    table_df, invoice_df = self.docu_processing(image)
-                    df, df2 = self.ocr_post_processing(table_df, invoice_df)
-                    df_text = df.to_markdown() if not df.empty else "No data found in df."
-                    df2_text = df2.to_markdown() if not df2.empty else "No data found in df2."
-
-                    # Send results back to the user
-                    await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{df_text}\n```")
-                    await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{df2_text}\n```")
-   
-
-                # # invoice_df, table_df, debug_info = self.fetch_airtable_data()
-                # df, df2 = self.ocr_post_processing(table_df, invoice_df)
-
-                # # Convert DataFrames to text
-                # df_text = df.to_markdown() if not df.empty else "No data found in df."
-                # df2_text = df2.to_markdown() if not df2.empty else "No data found in df2."
-
-                # # Send results back to the user
-                # await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{df_text}\n```")
-                # await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{df2_text}\n```")
+											  
+            if image:
+                await turn_context.send_activity("Processing the invoice...")
+                asyncio.create_task(self._process_invoice_async(turn_context, image))																										  
+																										 
+            else:
+                await turn_context.send_activity("Please upload a valid invoice image (JPG format).")
 
         except Exception as e:
-            print(f"An error occurred: {e}")    
-            await turn_context.send_activity("An error occurred while processing the invoice.")
+            print(f"An error occurred: {e}")
+            await turn_context.send_activity(f"Error processing invoice1:{e}")
+            
+    async def _process_invoice_async(self, turn_context: TurnContext, image):
+        try:
+            table_df, invoice_df = self.docu_processing(image)
+            df, df2 = self.ocr_post_processing(table_df, invoice_df)
 
-    
-    # async def on_message_activity(self, turn_context: TurnContext):
-    #     try:
-    #         if turn_context.activity.attachments and len(turn_context.activity.attachments) > 0:
-    #             await turn_context.send_activity("Invoice received! Processing your data...")
-    #             for attachment in turn_context.activity.attachments:
-    #                 print(f"Attachment content URL: {attachment.content_url}")
+            df_text = df.to_markdown(index=False) if not df.empty else "No data found in table."
+            df2_text = df2.to_markdown(index=False) if not df2.empty else "No summary data found."
 
-    #             # Capture the returned image file path from _handle_incoming_attachment
-    #             image = await self._handle_incoming_attachment(turn_context)
-    #             print(image)
-    #             if image:
-    #                 # Pass the image file path to docu_processing
-    #                 result = self.docu_processing(image)
-    #                 print(result)
+            def escape_markdown(text):
+             return text.replace('`', '')
 
-    #             table_df = pd.DataFrame()
-    #             invoice_df = pd.DataFrame()
-    #             invoice_df, table_df, debug_info = self.fetch_airtable_data()
-    #             df, df2 = self.ocr_post_processing(table_df, invoice_df)
+            await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{escape_markdown(df_text)}\n```")
+            await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{escape_markdown(df2_text)}\n```")
 
-    #             # Convert DataFrames to text
-    #             df_text = df.to_markdown() if not df.empty else "No data found in df."
-    #             df2_text = df2.to_markdown() if not df2.empty else "No data found in df2."
-
-    #             # Send results back to the user
-    #             await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{df_text}\n```")
-    #             await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{df2_text}\n```")
-
-    #             '''actual code end here'''
-            # else:
-            #     await self._display_options(turn_context)  # Show options
-            #     attachments = await self._handle_outgoing_attachment(turn_context)  # Get selected attachments
-            #     # Extract content URLs if attachments exist
-            #     if attachments:
-            #         response_urls = [attachment.content_url for attachment in attachments]
-            #         print(f"Selected Attachment URLs: {response_urls}")
-            #         result = self.docu_processing(response_urls)
-            #         print(result)  # Debug output
-            #     # print(f"Status Code: {response.status_code}")
-            #     # print(f"Headers: {response.headers}")
-            #     # print(f"Response Text: {response.text}")  # Log the full response body
-            #     # image_data = response.content  # Get the raw image bytes
-            #     # print("check2")
-            #     # Convert the image data to a PFImage
-            #     # pf_image = PFImage(image_data, mime_type=attachment.content_type)
-            #     # print("check3")
-            #     # print(pf_image)
-            #     # Pass the PFImage to the OCR function
-
-
-            #     # result = self.docu_processing(response)
-            #     # print(result)  # Debug output
         except Exception as e:
-            print(f"An error occurred: {e}")    
-            await turn_context.send_activity("An error occurred while processing the invoice.")
-
-        
-
-        
-
-        # user_status = await self.user_data_accessor.get(turn_context, lambda: {"first_message": False})
-        # question_index = await self.question_index_accessor.get(turn_context, lambda: 0)
-        # answers = await self.answers_accessor.get(turn_context, lambda: [])
-
-        # table_df = pd.DataFrame()
-        # invoice_df = pd.DataFrame()
-        # invoice_df, table_df, debug_info = self.fetch_airtable_data()
-        # confidences_df, val_list, df2, df = self.post_processing(table_df, invoice_df)
-        
-
-        # if not user_status["first_message"]:
-        #     df2_preview = df2.to_markdown(index=False)  
-        #     await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
-
-        
-        # # Save val_list to state if it's the first interaction
-        # if not user_status["first_message"]:
-        #     await self.val_list_accessor.set(turn_context, val_list)
-        # else:
-        #     val_list = await self.val_list_accessor.get(turn_context, lambda: [])
-
-        
-        # if val_list:  # If there are validation questions
-        #     # Check if this is the first question
-        #     if "question_index" not in user_status:
-        #         user_status["question_index"] = 0  # Initialize index for tracking questions
-        #         user_status["updated_val_list"] = val_list.copy()  # Keep a copy of original values
-
-        #     question_index = user_status["question_index"]
-
-        #     # If receiving a response from user
-        #     if user_status["first_message"] and question_index > 0:
-        #         user_input = turn_context.activity.text.strip()
-                
-        #         # Process user input
-        #         if user_input.lower() != "yes":
-        #             try:
-        #                 new_value = float(user_input)  # Convert to float
-        #                 user_status["updated_val_list"][question_index - 1][2] = new_value  # Update value
-        #             except ValueError:
-        #                 await turn_context.send_activity("Invalid input. Please enter a valid number.")
-        #                 return  # Re-ask the same question
-
-        #     # Ask next question if available
-        #     if question_index < len(val_list):
-        #         row_num, col_name, cell_value = val_list[question_index]
-        #         question_text = (
-        #             f"Is the extracted value '{cell_value}' in row {row_num} and column '{col_name}' correct? "
-        #             f"Type 'yes' if correct, or type the actual number if it's wrong."
-        #         )
-        #         await turn_context.send_activity(question_text)
-                
-        #         # Move to the next question
-        #         user_status["question_index"] += 1
-        #         user_status["first_message"] = True  
-
-        #     else:
-        #         # All questions answered, update df2
-        #         await turn_context.send_activity("All questions answered. Updating values...")
-        #         print("Updated val_list:", user_status["updated_val_list"])
-
-        #         for index, col, new_value in user_status["updated_val_list"]:
-        #             print("+==============+")
-        #             print(index, " ", col, " ", new_value)
-        #             df2.at[index, col] = new_value  # Apply updates to df2
-
-        #         # Reset tracking variables
-        #         user_status["first_message"] = False
-        #         user_status.pop("question_index", None)
-        #         user_status.pop("updated_val_list", None)
-        #         print(df2)
-
-        #         # Proceed with post-processing
-        #         self.execute_post_processing_validated_val(df2, df, confidences_df)
-        #         df2_preview = df2.to_markdown(index=False)  # Convert DataFrame to Markdown format
-        #         await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
-
-        # else:  # If val_list is empty, directly proceed with post-processing
-        #     self.execute_post_processing(df2, df, confidences_df)
-        #     df2_preview = df2.to_markdown(index=False)  # Convert DataFrame to Markdown format
-        #     await turn_context.send_activity(f"Here is the extracted data before validation:\n```\n{df2_preview}\n```")
-
-        # # Save state
-        # await self.user_data_accessor.set(turn_context, user_status)
-        # await self.question_index_accessor.set(turn_context, question_index)
-        # await self.answers_accessor.set(turn_context, answers)
-        # await self.val_list_accessor.set(turn_context, val_list)
-        # await self.user_state.save_changes(turn_context)
-
+            print(f"An error occurred: {e}")
+            #await turn_context.send_activity("An error occurred while processing the invoice.")
+            await turn_context.send_activity(f" Error processing invoice2: {str(e)}")
