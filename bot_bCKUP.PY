@@ -37,17 +37,30 @@ from typing import List  # Add this import
 from config import DefaultConfig
 import asyncio
 from tabulate import tabulate
+from azure.storage.blob import BlobServiceClient
+import pyodbc
 
 class MyBot(ActivityHandler):
     def __init__(self, user_state: UserState):
         super().__init__()
-        self.user_state = user_state
-        self.user_data_accessor = self.user_state.create_property("user_status")
-        self.question_index_accessor = self.user_state.create_property("question_index")
-        self.answers_accessor = self.user_state.create_property("answers")
-        self.val_list_accessor = self.user_state.create_property("val_list")
+        ## commented code to be removed
+        #self.user_state = user_state
+        #self.user_data_accessor = self.user_state.create_property("user_status")
+        #self.question_index_accessor = self.user_state.create_property("question_index")
+        #self.answers_accessor = self.user_state.create_property("answers")
+        #self.val_list_accessor = self.user_state.create_property("val_list")
         self.processed_messages = set()
 
+        # Azure SQL connection details
+        server = 'hrleaveapplication.database.windows.net'
+        database = 'hrleavemanagementDB'
+        username = 'mega'
+        password = 'password@123'
+        driver = '{ODBC Driver 17 for SQL Server}'  # Ensure this driver is installed
+
+        # Create connection string
+        connection_string = f'DRIVER={driver};SERVER={server};DATABASE={database};UID={username};PWD={password}'
+        
         self.API_KEY = "patHbVk2KOxbMFsjf.d9d53905e9aead5ffdb50b411eaccac276bfe3b23fd83628f0660a1700911d5e"
         self.BASE_ID = "appFA2iUehCVrUSdl"
         self.HEADERS = {
@@ -1225,6 +1238,13 @@ class MyBot(ActivityHandler):
             if user_text in ["hi", "hello", "/start"]:
                 await turn_context.send_activity("Hello! Please upload your invoice(s) here in the chatbot.")
                 return
+            
+            # If user confirms "yes"
+            if user_text in ["yes", "yup", "it is", "yes it's correct"]:
+                await turn_context.send_activity("Saving your data....")
+                self.save_outputs_to_blob()  # call the save function
+                await turn_context.send_activity("Data saved successfully.")
+                return
 
             image = None
 
@@ -1327,13 +1347,48 @@ class MyBot(ActivityHandler):
                 message3 += f" `{Total}` : `{Amount}`\n\n"
 
             # Send message
-            await turn_context.send_activity(message3)            
-            
-            #await turn_context.send_activity(f"{df_text}")
-            #await turn_context.send_activity(f"**Processed Invoice Table:**\n```\n{escape_markdown(df_text)}\n```")
-            #await turn_context.send_activity(f"**Processed Invoice Summary:**\n```\n{escape_markdown(df2_text)}\n```")
+            await turn_context.send_activity(message3)
+            await turn_context.send_activity("Are the extracted information correct?")            
 
         except Exception as e:
-            print(f"An error occurred: {e}")
-            #await turn_context.send_activity("An error occurred while processing the invoice.")
+            print(f"An error occurred: {e}")            
             await turn_context.send_activity(f" Error processing invoice2: {str(e)}")
+
+
+    def save_outputs_to_blob(self):
+        try:
+            # Azure Storage settings (load from your config or set directly)
+            AZURE_STORAGE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=aiagentdata001;AccountKey=ft6yr+REG0Kzr9fxn0U2DIjvofbVHfoDCHYEqEo1oCETEkh8/8t0AqTMMmi6mTH+0NMSMaSW9rcX+AStPQGOrg==;EndpointSuffix=core.windows.net"
+            """AZURE_STORAGE_CONNECTION_STRING = (
+                "DefaultEndpointsProtocol=https;"
+                "AccountName=aiagentautomation;"
+                "AccountKey=NVd5b23iuhasfkIugflkjsdfklj...;"
+                 "EndpointSuffix=core.windows.net"
+                )"""
+
+            container_name = "invoice"
+
+            # Initialize BlobServiceClient
+            blob_service_client = BlobServiceClient.from_connection_string(AZURE_STORAGE_CONNECTION_STRING)
+            container_client = blob_service_client.get_container_client(container_name)
+
+            # Files to upload
+            file_paths = {
+                "outputs/table_df_output_telegram.json": "/home/site/wwwroot/outputs/table_df_output_telegram.json",
+                "outputs/summary_df_output_telegram.json": "/home/site/wwwroot/outputs/summary_df_output_telegram.json"
+            }
+
+            for blob_name, file_path in file_paths.items():
+                # Open the file and upload to Blob Storage
+                with open(file_path, "rb") as data:
+                    container_client.upload_blob(
+                        name=blob_name,
+                        data=data,
+                        overwrite=True  # Overwrite if already exists
+                    )
+                    logging.info(f"Uploaded {blob_name} successfully to Blob Storage.")
+
+        except Exception as e:
+            logging.error(f"Error uploading files to Blob Storage: {e}")
+    
+    

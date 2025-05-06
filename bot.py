@@ -38,46 +38,47 @@ from config import DefaultConfig
 import asyncio
 from tabulate import tabulate
 from azure.storage.blob import BlobServiceClient
+import pyodbc
 
 class MyBot(ActivityHandler):
     def __init__(self, user_state: UserState):
-        super().__init__()
-        self.user_state = user_state
-        self.user_data_accessor = self.user_state.create_property("user_status")
-        self.question_index_accessor = self.user_state.create_property("question_index")
-        self.answers_accessor = self.user_state.create_property("answers")
-        self.val_list_accessor = self.user_state.create_property("val_list")
+        super().__init__()        
         self.processed_messages = set()
 
-        self.API_KEY = "patHbVk2KOxbMFsjf.d9d53905e9aead5ffdb50b411eaccac276bfe3b23fd83628f0660a1700911d5e"
-        self.BASE_ID = "appFA2iUehCVrUSdl"
-        self.HEADERS = {
-            "Authorization": f"Bearer {self.API_KEY}",
-            "Content-Type": "application/json"
-        }
-        self.TABLE_NAME_READ_1 = "Table 3"
-        self.TABLE_NAME_READ_2 = "Table 4"
-        self.BATCH_SIZE = 10
-        self.URL1 = f"https://api.airtable.com/v0/{self.BASE_ID}/{self.TABLE_NAME_READ_1}"
-        self.URL2 = f"https://api.airtable.com/v0/{self.BASE_ID}/{self.TABLE_NAME_READ_2}"
+        # Azure SQL connection details
+        server = 'hrleaveapplication.database.windows.net'
+        database = 'hrleavemanagementDB'
+        username = 'mega'
+        password = 'password@123'
+        driver = '{ODBC Driver 17 for SQL Server}'
+
+        # Create connection string
+        self.connection_string = f'DRIVER={driver};SERVER={server};DATABASE={database};UID={username};PWD={password}'
+
+    def insert_to_sql(self, df: pd.DataFrame, table_name: str):
+        try:
+            with pyodbc.connect(self.connection_string) as conn:
+                cursor = conn.cursor()
+                columns = df.columns.tolist()
+                col_placeholders = ', '.join(['?'] * len(columns))
+                insert_sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({col_placeholders})"
+                for _, row in df.iterrows():
+                    cursor.execute(insert_sql, tuple(row))
+                conn.commit()
+                print(f"Data inserted into {table_name} successfully.")
+        except Exception as e:
+            print(f"Error inserting data into Azure SQL: {e}")
         
-    def fetch_all_airtable_data(self,url, headers):
-        records = []
-        offset = None
-        while True:
-            params = {}
-            if offset:
-                params["offset"] = offset
-            response = requests.get(url, headers=headers, params=params)
-            if response.status_code != 200:
-                print(f"Error: {response.status_code}")
-                break
-            data = response.json()
-            records.extend(data.get("records", []))
-            offset = data.get("offset")
-            if not offset:
-                break
-        return records
+    def fetch_sql_data(self, table_name: str) -> pd.DataFrame:
+        try:
+            with pyodbc.connect(self.connection_string) as conn:
+                query = f"SELECT * FROM {table_name}"
+                df = pd.read_sql(query, conn)
+                print(f"Fetched {len(df)} records from {table_name}.")
+                return df
+        except Exception as e:
+            print(f"Error reading from Azure SQL: {e}")
+            return pd.DataFrame()
     
     def fetch_airtable_data(self):
         # Fetch all records from both tables
@@ -674,7 +675,7 @@ class MyBot(ActivityHandler):
 
     
 
-    def docu_processing(self, input_image):
+    """def docu_processing(self, input_image):
         print(input_image)
         ai_studio_endpoint = 'https://azureaistudioh5078952159.cognitiveservices.azure.com/'
         ai_studio_key = '9BMknek8xn6Le7c9AG3THiBj8MhbN33MtGLjSpmAs5hMWDjWbB27JQQJ99BAACYeBjFXJ3w3AAAAACOGHKb6'
@@ -779,8 +780,51 @@ class MyBot(ActivityHandler):
                 print(f"Record inserted successfully: {response.json()}")
             else:
                 print(f"Error inserting record: {response.status_code}, {response.text}")
-        return table_df, invoice_df
+        return table_df, invoice_df """
 
+    def docu_processing(self, input_image):
+        endpoint = "https://docu-int-demo-prycegas.cognitiveservices.azure.com/"
+        key = "376e1adee6124181baf381262ec40ccc"
+        model_id = "invoice-prycegas4"
+        document_analysis_client = DocumentAnalysisClient(endpoint=endpoint, credential=AzureKeyCredential(key))
+
+        with open(input_image, "rb") as file:
+            poller = document_analysis_client.begin_analyze_document(model_id, file)
+
+        invoices = poller.result()
+
+        invoice_data = []
+        for page in invoices.pages:
+            for word in page.words:
+                invoice_data.append([
+                    page.page_number, 
+                    word.content, 
+                    word.confidence
+                ])
+
+        invoice_df = pd.DataFrame(invoice_data, columns=['Page Number', 'Word Content', 'Confidence'])
+        invoice_df["Word ID"] = invoice_df.index + 1
+
+        field_data = []
+        for document in invoices.documents:
+            for name, field in document.fields.items():
+                field_value = str(field.value) if field.value else str(field.content)
+                field_data.append([
+                    name,
+                    field_value,
+                    field.value_type,
+                    field.confidence
+                ])
+
+        table_df = pd.DataFrame(field_data, columns=['Field Name', 'Field Value', 'Field Type', 'Confidence'])
+
+        # Insert to Azure SQL tables
+        self.insert_to_sql(invoice_df, 'InvoiceOCRWords')
+        self.insert_to_sql(table_df, 'InvoiceFields')
+
+        return table_df, invoice_df
+    
+    
     def ocr_post_processing(self, df, data):
         row_index = 0
         for index, row in df.iterrows():
